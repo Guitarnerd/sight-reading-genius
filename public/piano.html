@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Two Octave Piano</title>
+<style>
+/* Layout: one full-screen keyboard, a thin status bar above it */
+:root {
+  --bg: #e9ebef;
+  --fg: #1d2129;
+  --muted: #5d6573;
+  --white: #fbfbf8;
+  --white-down: #cfd8e6;
+  --black: #1b1d22;
+  --black-down: #3f5a86;
+  --edge: #8a909c;
+  --font: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #15171c; --fg: #e6e8ec; --muted: #9aa2b1;
+  --white: #e8e8e3; --white-down: #a9b9d3; --black: #0b0c0f; --black-down: #4d6ea3; --edge: #000;
+  color-scheme: dark } }
+:root[data-theme="dark"] {
+  --bg: #15171c; --fg: #e6e8ec; --muted: #9aa2b1;
+  --white: #e8e8e3; --white-down: #a9b9d3; --black: #0b0c0f; --black-down: #4d6ea3; --edge: #000;
+  color-scheme: dark }
+
+html, body { height: 100%; }
+body {
+  background: var(--bg); color: var(--fg); font-family: var(--font);
+  display: flex; flex-direction: column;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-block: 8px 12px; box-sizing: border-box;
+  user-select: none; -webkit-user-select: none; -webkit-touch-callout: none;
+  overflow: hidden;
+}
+.bar { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; padding-block: 4px 10px; }
+.note { font-size: 28px; font-weight: 600; font-variant-numeric: tabular-nums; min-width: 4ch; }
+.hint { font-size: 13px; color: var(--muted); }
+.keys { position: relative; flex: 1; min-height: 160px; max-height: 420px; display: flex; touch-action: none; }
+.w {
+  flex: 1; background: var(--white); border: 1px solid var(--edge); border-left-width: 0;
+  border-radius: 0 0 6px 6px; display: flex; align-items: flex-end; justify-content: center;
+  padding-bottom: 8px; font-size: 12px; color: var(--muted);
+}
+.w:first-child { border-left-width: 1px; }
+.b {
+  position: absolute; top: 0; height: 60%; background: var(--black);
+  border-radius: 0 0 4px 4px; z-index: 2;
+}
+.down.w { background: var(--white-down); }
+.down.b { background: var(--black-down); }
+@media (orientation: portrait) {
+  .hint::after { content: " Turn the phone sideways for bigger keys."; }
+}
+</style>
+</head>
+<body>
+
+<div class="bar">
+  <div class="note" id="note">C4</div>
+  <div class="hint">Tap a key.</div>
+</div>
+<div class="keys" id="keys"></div>
+
+<script>
+const START = 48;   // C3
+const END = 72;     // C5 (two octaves plus the top C)
+const NAMES = ["C","C♯","D","D♯","E","F","F♯","G","G♯","A","A♯","B"];
+const keysEl = document.getElementById("keys");
+const noteEl = document.getElementById("note");
+const isBlack = m => [1,3,6,8,10].includes(m % 12);
+const name = m => NAMES[m % 12] + (Math.floor(m / 12) - 1);
+
+// Build keys
+const whites = [];
+for (let m = START; m <= END; m++) if (!isBlack(m)) whites.push(m);
+const keyEls = {};
+for (let m = START; m <= END; m++) {
+  const el = document.createElement("div");
+  el.dataset.midi = m;
+  if (isBlack(m)) {
+    el.className = "b";
+    const left = whites.indexOf(m - 1) + 1;   // boundary after the white key below
+    el.style.left = `calc(${left / whites.length * 100}% - ${0.3 / whites.length * 100}%)`;
+    el.style.width = `${0.6 / whites.length * 100}%`;
+  } else {
+    el.className = "w";
+    if (m % 12 === 0) el.textContent = name(m);
+  }
+  keysEl.appendChild(el);
+  keyEls[m] = el;
+}
+
+// Sound: a short plucked tone, made on the fly so nothing has to download
+let ctx, master;
+function audio() {
+  if (!ctx) {
+    ctx = new (window.AudioContext || window.webkitAudioContext)();
+    master = ctx.createGain();
+    master.gain.value = 0.5;
+    master.connect(ctx.destination);
+  }
+  if (ctx.state === "suspended") ctx.resume();
+  return ctx;
+}
+function play(m) {
+  const c = audio(), t = c.currentTime;
+  const f = 440 * Math.pow(2, (m - 69) / 12);
+  const g = c.createGain();
+  g.gain.setValueAtTime(0, t);
+  g.gain.linearRampToValueAtTime(0.9, t + 0.005);
+  g.gain.exponentialRampToValueAtTime(0.25, t + 0.4);
+  g.gain.exponentialRampToValueAtTime(0.0001, t + 2.2);
+  const lp = c.createBiquadFilter();
+  lp.type = "lowpass";
+  lp.frequency.setValueAtTime(Math.min(f * 8, 9000), t);
+  lp.frequency.exponentialRampToValueAtTime(Math.max(f * 1.5, 300), t + 1.5);
+  lp.connect(g); g.connect(master);
+  [[1, "triangle", 0.6], [2, "sine", 0.25], [3, "sine", 0.08]].forEach(([mult, type, amp]) => {
+    const o = c.createOscillator(), og = c.createGain();
+    o.type = type; o.frequency.value = f * mult; og.gain.value = amp;
+    o.connect(og); og.connect(lp);
+    o.start(t); o.stop(t + 2.3);
+  });
+}
+
+// Input: one note per finger. Sliding a finger moves to the next key.
+const active = new Map();   // pointerId -> midi
+function keyAt(x, y) {
+  const el = document.elementFromPoint(x, y);
+  return el && el.dataset && el.dataset.midi ? +el.dataset.midi : null;
+}
+function press(id, m) {
+  const prev = active.get(id);
+  if (prev === m) return;
+  if (prev != null) keyEls[prev].classList.remove("down");
+  active.set(id, m);
+  if (m == null) return;
+  keyEls[m].classList.add("down");
+  noteEl.textContent = name(m);
+  play(m);
+}
+function release(id) {
+  const m = active.get(id);
+  if (m != null) keyEls[m].classList.remove("down");
+  active.delete(id);
+}
+keysEl.addEventListener("pointerdown", e => {
+  e.preventDefault();
+  keysEl.setPointerCapture(e.pointerId);
+  press(e.pointerId, keyAt(e.clientX, e.clientY));
+});
+keysEl.addEventListener("pointermove", e => {
+  if (active.has(e.pointerId)) press(e.pointerId, keyAt(e.clientX, e.clientY));
+});
+["pointerup", "pointercancel"].forEach(t => keysEl.addEventListener(t, e => release(e.pointerId)));
+keysEl.addEventListener("contextmenu", e => e.preventDefault());
+</script>
+</body>
+</html>
